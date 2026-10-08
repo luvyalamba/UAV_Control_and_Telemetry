@@ -1,6 +1,6 @@
 # Modular UAV Transmitter-Receiver System
 
-A custom multi-channel transmitter-receiver system with multiple analog and digital channels, designed as a modular platform for UAV (quadcopter) control and telemetry operations.
+A modular UAV control and telemetry platform designed to be adapted across different UAV platforms, with multi-channel wireless control and onboard flight-control capabilities. The system was also integrated with and used for PID tuning and flight testing on a quadcopter, validating its practical application in real-world UAV control.
 
 ## Transmitter
 
