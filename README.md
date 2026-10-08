@@ -24,7 +24,7 @@ The receiver provides the interface between the wireless control system and the 
 
 ## Wireless Communication
 
-The system uses **RFM69HCW 434 MHz** modules with dipole antennas for high-range, line-of-sight communication.
+The system uses **RFM69HCW 434 MHz** modules with dipole antennas for high-range communication even through light obstructions.
 
 The **14 dBm transmit power** and 434 MHz operating frequency are intended to provide reliable long-range communication and improved propagation around obstacles compared with higher-frequency links.
 
