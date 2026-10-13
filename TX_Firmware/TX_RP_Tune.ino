@@ -6,6 +6,39 @@
 
 #include <SPI.h>
 #include <RFM69.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+
+// -------------------- OLED (128x64, I2C) --------------------
+// Two common chips look identical from the outside:
+//   SH1106  - most 1.3" modules. Driven with the SSD1306 library they show
+//             garbled / shifted text with a strip of noise at the edge.
+//   SSD1306 - most 0.96" modules.
+// OLED_SH1106 1 -> library "Adafruit SH110X"   (default)
+// OLED_SH1106 0 -> library "Adafruit SSD1306"
+// Both also need "Adafruit GFX". If the screen stays blank, try OLED_ADDR 0x3D.
+#define OLED_SH1106   1
+#define OLED_SDA_PIN  21
+#define OLED_SCL_PIN  22
+#define OLED_WIDTH    128
+#define OLED_HEIGHT   64
+#define OLED_ADDR     0x3C
+const uint32_t OLED_PERIOD_MS = 200;   // 5 Hz: a full redraw takes ~25 ms on I2C
+
+#if OLED_SH1106
+  #include <Adafruit_SH110X.h>
+  Adafruit_SH1106G oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+  #define OLED_WHITE SH110X_WHITE
+  #define OLED_BLACK SH110X_BLACK
+  #define OLED_BEGIN() oled.begin(OLED_ADDR, true)
+#else
+  #include <Adafruit_SSD1306.h>
+  Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+  #define OLED_WHITE SSD1306_WHITE
+  #define OLED_BLACK SSD1306_BLACK
+  #define OLED_BEGIN() oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)
+#endif
+bool oledOk = false;
 
 // -------------------- Radio Config --------------------
 #define NETWORKID     100
@@ -67,6 +100,10 @@ int joyXMin, joyXMax, joyYMin, joyYMax;
 // Expo: softer around centre for fine corrections, full output at the ends.
 // 0 = linear, 1 = fully cubic. 0.3 is a mild curve.
 const float STICK_EXPO = 0.3f;
+
+// Roll/pitch sensitivity: full stick sends 500 * STICK_SCALE.
+// 1/2 -> full stick = +/-250 = +/-15 deg on the drone (RX MAX_ANGLE_DEG 30).
+const float STICK_SCALE = 1.0f / 2.0f;
 
 // Flip a stick direction here if it moves the drone the wrong way
 const bool ROLL_INVERT  = false;
@@ -153,9 +190,65 @@ int stickToCommand(float rawF, int center, int &lo, int &hi, bool invert) {
   float x = (abs(delta) - JOY_DEADZONE) / span;
   x = constrain(x, 0.0f, 1.0f);
   x = (1.0f - STICK_EXPO) * x + STICK_EXPO * x * x * x;
-  int out = (int)(x * 500.0f + 0.5f);
+  int out = (int)(x * 500.0f * STICK_SCALE + 0.5f);
   if (delta < 0) out = -out;
   return invert ? -out : out;
+}
+
+void oledSetup() {
+  Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+  Wire.setClock(400000);
+  oledOk = OLED_BEGIN();
+  if (!oledOk) { Serial.println("OLED not found - continuing without it"); return; }
+  oled.setTextWrap(false);
+  oled.clearDisplay();
+  oled.setTextColor(OLED_WHITE, OLED_BLACK);
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);  oled.print("TX");
+  oled.setTextSize(1);
+  oled.setCursor(0, 24); oled.print("Calibrating sticks");
+  oled.setCursor(0, 36); oled.print("don't touch...");
+  oled.display();
+}
+
+// Layout (128x64):
+//   y 0  small: SAFE / ARMED / THR DOWN!   + radio
+//   y 9  small: T throttle  R roll  P pitch (as sent)
+//   y18  big:   P 0.500           pot %
+//   y34  big:   I 1.50            pot %
+//   y50  big:   D 0.0200          pot %
+// Called at 5 Hz from loop(), right after a send.
+void oledUpdate(int potKp, int potKi, int potKd) {
+  if (!oledOk) return;
+  char buf[24];
+  oled.clearDisplay();
+
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  if (pkt.armSwitch && pkt.throttle >= 30) oled.print("THR DOWN!");   // RX arms only at low throttle
+  else                                     oled.print(pkt.armSwitch ? "ARMED" : "SAFE");
+  oled.setCursor(80, 0);
+  oled.print(radioOk ? "RADIO OK" : "NO RADIO");
+
+  snprintf(buf, sizeof(buf), "T%4d R%4d P%4d", pkt.throttle, pkt.roll, pkt.pitch);
+  oled.setCursor(0, 9);
+  oled.print(buf);
+
+  oled.setTextSize(2);
+  snprintf(buf, sizeof(buf), "P %5.3f", pkt.kp);
+  oled.setCursor(0, 18); oled.print(buf);
+  snprintf(buf, sizeof(buf), "I %5.2f", pkt.ki);
+  oled.setCursor(0, 34); oled.print(buf);
+  snprintf(buf, sizeof(buf), "D %6.4f", pkt.kd);
+  oled.setCursor(0, 50); oled.print(buf);
+
+  // pot positions 0-100 %, small, right-aligned
+  oled.setTextSize(1);
+  snprintf(buf, sizeof(buf), "%3d%%", potKp / 10); oled.setCursor(104, 22); oled.print(buf);
+  snprintf(buf, sizeof(buf), "%3d%%", potKi / 10); oled.setCursor(104, 38); oled.print(buf);
+  snprintf(buf, sizeof(buf), "%3d%%", potKd / 10); oled.setCursor(104, 54); oled.print(buf);
+
+  oled.display();
 }
 
 void setup() {
@@ -182,6 +275,7 @@ void setup() {
     Serial.println("Radio Init Failed - printing inputs only, nothing is sent");
   }
 
+  oledSetup();
   calibrateJoystick();
 
   throttleFilt = analogRead(THROTTLE_PIN);
@@ -261,5 +355,12 @@ void loop() {
     uint32_t t0 = micros();
     radio.send(RECEIVERID, (const void*)&pkt, sizeof(pkt));
     lastSendUs = micros() - t0;
+  }
+
+  // ---- OLED (5 Hz, after the send so the packet goes out on time) ----
+  static uint32_t lastOled = 0;
+  if (now - lastOled >= OLED_PERIOD_MS) {
+    lastOled = now;
+    oledUpdate(pot1Val, pot3Val, pot2Val);
   }
 }
